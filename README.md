@@ -67,3 +67,6 @@ Re-run with --seed 2847163054 to reproduce this result.
 3. All ten starting classes are scored by levels needed to meet the weapon's stat requirements. Ties are broken randomly using the same seed.
 4. The winning class's STR/DEX/INT/FTH are raised to exactly meet requirements.
 5. Both class ID ranges (2000 and 3000) are patched in `CharaInitParam.param` inside `GameParam.parambnd.dcx`.
+
+## Credits
+Credits to the (Dark Souls Randomizer)[https://github.com/HotPocketRemix/DarkSoulsItemRandomizer] without which the inlined param reading and editing logic would not have been possible. It is also what is used in the tools folder.
