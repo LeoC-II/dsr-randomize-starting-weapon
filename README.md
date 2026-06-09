@@ -10,16 +10,21 @@ Randomizes the starting weapon for Dark Souls Remastered. Each run picks a rando
 
 ## Setup
 
-Edit `config.json` to point to your game installation:
+Run the following command (this is on windows):
+```bash
+cp .\config.json.example config.json
+```
+
+Edit `config.json` to point to your game installation (default Steam value is already in `config.json.example`):
 
 ```json
 {
     "gameparam_path": "C:/Program Files (x86)/Steam/steamapps/common/DARK SOULS REMASTERED/param/GameParam/GameParam.parambnd.dcx",
-    "backup_path": ""
+    "backup_path": "C:/Program Files (x86)/Steam/steamapps/common/DARK SOULS REMASTERED/param/GameParam/GameParam.parambnd.dcx.bak"
 }
 ```
 
-Leave `backup_path` as `""` to store the backup next to `random_weapon.py`.
+`backup_path` defaults to next to the game file. Change it if you want the backup stored elsewhere.
 
 ## Usage
 
