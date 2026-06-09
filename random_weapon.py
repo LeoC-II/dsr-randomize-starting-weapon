@@ -7,7 +7,6 @@ Dependencies: only game_constants.py (no DarkSoulsItemRandomizer needed).
 """
 
 from pathlib import Path
-import json
 import random
 import struct
 import zlib
@@ -23,11 +22,20 @@ from game_constants import (
 # Config
 # ---------------------------------------------------------------------------
 
-GAMEPARAM_PATH = Path(
-    r"C:\Program Files (x86)\Steam\steamapps\common"
-    r"\DARK SOULS REMASTERED\param\GameParam\GameParam.parambnd.dcx"
-)
-BACKUP_PATH = Path(__file__).parent / "GameParam.parambnd.dcx.bak"
+def _load_config() -> dict:
+    config_path = Path(__file__).parent / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"config.json not found at {config_path}\n"
+            "Create it with: {\"gameparam_path\": \"<path to GameParam.parambnd.dcx>\"}"
+        )
+    import json
+    with config_path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+_config      = _load_config()
+GAMEPARAM_PATH = Path(_config["gameparam_path"])
+BACKUP_PATH    = Path(_config.get("backup_path", str(Path(__file__).parent / "GameParam.parambnd.dcx.bak")))
 
 EXCLUDED_CATEGORIES = {
     "0",   # arrows & bolts
@@ -311,8 +319,12 @@ def levels_needed(stats, req):
           + max(0, req["int"] - stats["int"]) + max(0, req["fth"] - stats["fth"]))
 
 
-def find_best_class(req):
-    return min(STARTING_CLASSES.items(), key=lambda kv: levels_needed(kv[1], req))
+def find_best_class(req, rng: random.Random):
+    """Return the class requiring the fewest level-ups. Breaks ties randomly using rng."""
+    best_levels = min(levels_needed(stats, req) for stats in STARTING_CLASSES.values())
+    candidates  = [name for name, stats in STARTING_CLASSES.items()
+                   if levels_needed(stats, req) == best_levels]
+    return rng.choice(candidates), best_levels
 
 
 def compute_final_stats(class_name, req):
@@ -324,74 +336,88 @@ def compute_final_stats(class_name, req):
 # Main
 # ---------------------------------------------------------------------------
 
-pool = [w for w in WEAPONS.values()
-        if not w["name"].startswith("徘徊")
-        and w.get("wepmotionCategory", "") not in EXCLUDED_CATEGORIES]
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="DSR random starting weapon randomizer")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed (omit for a random seed)")
+    args = parser.parse_args()
 
-weapon     = random.choice(pool)
-spell      = determine_spell(weapon)
-req        = combine_requirements(weapon, SPELL_REQUIREMENTS.get(spell))
-best_class, _ = find_best_class(req)
-levels     = levels_needed(STARTING_CLASSES[best_class], req)
-final_stats = compute_final_stats(best_class, req)
-final_level = STARTING_CLASSES[best_class]["level"] + levels
-spell_id    = SPELL_IDS.get(spell) if spell else None
+    seed = args.seed if args.seed is not None else random.randrange(2**32)
+    rng  = random.Random(seed)
+    print(f"Seed: {seed}")
 
-print(f"\n{'='*60}")
-print(f"RANDOMIZATION RESULT")
-print(f"{'='*60}")
-print(f"Weapon : {weapon['name']} (ID: {weapon['ID']})")
-print(f"Spell  : {spell}")
-print(f"Class  : {best_class}  (+{levels} levels → {final_level})")
-print(f"Stats  : STR {final_stats['str']}  DEX {final_stats['dex']}  "
-      f"INT {final_stats['int']}  FTH {final_stats['fth']}")
+    pool = [w for w in WEAPONS.values()
+            if not w["name"].startswith("徘徊")
+            and w.get("wepmotionCategory", "") not in EXCLUDED_CATEGORIES]
 
-# --- Load DCX → BND → CharaInitParam ---
-print(f"\nLoading {GAMEPARAM_PATH} ...")
-raw_dcx  = GAMEPARAM_PATH.read_bytes()
-bnd_data = dcx_decompress(raw_dcx)
-entries, fmt, be, sig, unk_bytes = bnd3_unpack(bnd_data)
+    weapon      = rng.choice(pool)
+    spell       = determine_spell(weapon)
+    req         = combine_requirements(weapon, SPELL_REQUIREMENTS.get(spell))
+    best_class, levels = find_best_class(req, rng)
+    final_stats = compute_final_stats(best_class, req)
+    final_level = STARTING_CLASSES[best_class]["level"] + levels
+    spell_id    = SPELL_IDS.get(spell) if spell else None
 
-chr_idx  = next(i for i, (_, name, _, _flag) in enumerate(entries) if "CharaInitParam" in name)
-chr_entry = entries[chr_idx]
-chr_name, chr_data = chr_entry[1], chr_entry[2]
-rows = parse_chara_init_param(chr_data)
+    print(f"\n{'='*60}")
+    print(f"RANDOMIZATION RESULT")
+    print(f"{'='*60}")
+    print(f"Weapon : {weapon['name']} (ID: {weapon['ID']})")
+    print(f"Spell  : {spell}")
+    print(f"Class  : {best_class}  (+{levels} levels → {final_level})")
+    print(f"Stats  : STR {final_stats['str']}  DEX {final_stats['dex']}  "
+          f"INT {final_stats['int']}  FTH {final_stats['fth']}")
 
-# --- Backup before touching anything ---
-if not BACKUP_PATH.exists():
-    BACKUP_PATH.write_bytes(raw_dcx)
-    print(f"Backup written → {BACKUP_PATH}")
-else:
-    print(f"Backup already exists, skipping → {BACKUP_PATH}")
+    # --- Load DCX → BND → CharaInitParam ---
+    # Restore from backup first if it exists, so each run starts from clean state
+    if BACKUP_PATH.exists():
+        print(f"\nRestoring from backup → {BACKUP_PATH}")
+        raw_dcx = BACKUP_PATH.read_bytes()
+    else:
+        raw_dcx = GAMEPARAM_PATH.read_bytes()
+        BACKUP_PATH.write_bytes(raw_dcx)
+        print(f"Backup written → {BACKUP_PATH}")
 
-# --- Patch both class ID ranges ---
-target_ids = {CLASS_IDS_2000[best_class], CLASS_IDS_3000[best_class]}
-patched = 0
-for row in rows:
-    if row[0] in target_ids:
-        patch_class_record(
-            row[2],
-            weapon_id   = int(weapon["ID"]),
-            spell_id    = spell_id,
-            soul_level  = final_level,
-            str_        = final_stats["str"],
-            dex         = final_stats["dex"],
-            int_        = final_stats["int"],
-            fth         = final_stats["fth"],
-        )
-        patched += 1
+    bnd_data = dcx_decompress(raw_dcx)
+    entries, fmt, be, sig, unk_bytes = bnd3_unpack(bnd_data)
 
-if patched == 0:
-    raise RuntimeError(f"No rows matched class IDs {target_ids} — nothing patched.")
+    chr_idx   = next(i for i, (_, name, _, _flag) in enumerate(entries) if "CharaInitParam" in name)
+    chr_entry = entries[chr_idx]
+    chr_name, chr_data = chr_entry[1], chr_entry[2]
+    rows = parse_chara_init_param(chr_data)
 
-# --- Rebuild CharaInitParam → BND → DCX → write ---
-new_chr_data = build_chara_init_param(rows, chr_data)
-entries[chr_idx][2] = new_chr_data  # patch in-place, preserving id/name/flag
+    # --- Patch both class ID ranges ---
+    target_ids = {CLASS_IDS_2000[best_class], CLASS_IDS_3000[best_class]}
+    patched = 0
+    for row in rows:
+        if row[0] in target_ids:
+            patch_class_record(
+                row[2],
+                weapon_id  = int(weapon["ID"]),
+                spell_id   = spell_id,
+                soul_level = final_level,
+                str_       = final_stats["str"],
+                dex        = final_stats["dex"],
+                int_       = final_stats["int"],
+                fth        = final_stats["fth"],
+            )
+            patched += 1
 
-new_bnd  = bnd3_pack(entries, fmt, be, sig, unk_bytes)
-new_dcx  = dcx_compress(new_bnd, raw_dcx)
-GAMEPARAM_PATH.write_bytes(new_dcx)
+    if patched == 0:
+        raise RuntimeError(f"No rows matched class IDs {target_ids} — nothing patched.")
 
-print(f"\nPatched {patched} class record(s) (IDs {sorted(target_ids)}).")
-print(f"GameParam.parambnd.dcx updated.")
-print(f"\nTo restore: copy {BACKUP_PATH.name} back over GameParam.parambnd.dcx")
+    # --- Rebuild CharaInitParam → BND → DCX → write ---
+    new_chr_data = build_chara_init_param(rows, chr_data)
+    entries[chr_idx][2] = new_chr_data
+
+    new_bnd = bnd3_pack(entries, fmt, be, sig, unk_bytes)
+    new_dcx = dcx_compress(new_bnd, raw_dcx)
+    GAMEPARAM_PATH.write_bytes(new_dcx)
+
+    print(f"\nPatched {patched} class record(s) (IDs {sorted(target_ids)}).")
+    print(f"GameParam.parambnd.dcx updated.")
+    print(f"\nRe-run with --seed {seed} to reproduce this result.")
+
+
+if __name__ == "__main__":
+    main()

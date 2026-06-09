@@ -1,8 +1,16 @@
+# Configs
+config.json
+
+# MISC
 __pycache__
 .venv
+
+# LLM
+scratchpad
+
+# Inspired by
 DarkSoulsItemRandomizer-master
 Param Vessel V1.12-1369-V1-12
 Param.Vessel.1.3.-.DS1R.Version
 Param.Vessel.1.3.-.DS1R.Version
 ParamVessel-master
-scratchpad
